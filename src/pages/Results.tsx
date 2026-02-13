@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Navbar } from "@/components/Navbar";
+import { supabase } from "@/integrations/supabase/client";
 import {
   ArrowLeft,
   Download,
@@ -13,102 +14,113 @@ import {
   AlertCircle,
   AlertTriangle,
   CheckCircle2,
-  Calculator,
-  Settings2,
-  Droplets,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-// Mock data for demo
-const mockReport = {
-  id: "demo",
-  projectName: "Rice Paddy Emission Reduction Project - Luzon",
-  createdAt: new Date().toISOString(),
+interface AuditIssue {
+  id?: string;
+  severity: "major" | "minor";
+  category: string;
+  title: string;
+  section: string | null;
+  description: string;
+  suggestedFix?: string;
+  suggested_fix?: string;
+  status?: string;
+}
+
+interface AuditReport {
+  projectName: string;
   summary: {
-    major: 2,
-    minor: 3,
-    compliant: 12,
-  },
-  categories: [
-    {
-      id: "calculation",
-      name: "Calculation Accuracy",
-      icon: Calculator,
-      issues: [
-        {
-          id: "1",
-          severity: "major" as const,
-          title: "CH₄ emission calculation mismatch",
-          section: "Section 5.2 - Emission Calculations",
-          description:
-            "The CH₄ emission total in the PDD (12,450 tCO₂e) does not match the calculation spreadsheet (11,890 tCO₂e). This represents a 4.7% discrepancy.",
-          suggestedFix:
-            "Recalculate CH₄ emissions using the formula RECH4,s = Σ(EFCH4,R,s,st × As,st × 10⁻³ × GWP_CH4) and ensure both documents use consistent input values.",
-        },
-        {
-          id: "2",
-          severity: "minor" as const,
-          title: "GWP value rounding",
-          section: "Section 5.1 - Methodology Parameters",
-          description:
-            "GWP for CH₄ is listed as 25 in one section but 28 in the calculations. The JCM methodology requires GWP_CH4 = 28.",
-          suggestedFix:
-            "Update all references to use GWP_CH4 = 28 as per IPCC AR5 values specified in the methodology.",
-        },
-      ],
-    },
-    {
-      id: "parameters",
-      name: "Parameter Compliance",
-      icon: Settings2,
-      issues: [
-        {
-          id: "3",
-          severity: "major" as const,
-          title: "Missing scaling factor documentation",
-          section: "Annex B - Monitoring Parameters",
-          description:
-            "The pre-season water regime scaling factor (SFp) is not documented. This is required for baseline emission calculations.",
-          suggestedFix:
-            "Document the SFp value based on the actual pre-season water management practice. Use the values from Table 2 of the methodology.",
-        },
-        {
-          id: "4",
-          severity: "minor" as const,
-          title: "Emission factor source not cited",
-          section: "Section 4.3 - Default Values",
-          description:
-            "The emission factor for dry season (1.46 kgCH₄/ha/day) is used but the IPCC source is not properly cited.",
-          suggestedFix:
-            "Add citation: IPCC 2019 Refinement to the 2006 IPCC Guidelines, Volume 4, Chapter 5, Table 5.11.",
-        },
-      ],
-    },
-    {
-      id: "eligibility",
-      name: "Eligibility Criteria",
-      icon: Droplets,
-      issues: [
-        {
-          id: "5",
-          severity: "minor" as const,
-          title: "Drainage depth measurement frequency",
-          section: "Section 6.2 - Monitoring Plan",
-          description:
-            "The monitoring plan specifies monthly drainage depth measurements, but weekly measurements are required during the cultivation period.",
-          suggestedFix:
-            "Update monitoring frequency to weekly measurements during cultivation and maintain the -15cm threshold verification.",
-        },
-      ],
-    },
-  ],
+    major: number;
+    minor: number;
+    compliant: number;
+  };
+  issues: AuditIssue[];
+  compliantRules?: { ruleNumber: number; title: string; evidence: string }[];
+  overallSummary?: string;
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  calculation: "Calculation Accuracy",
+  parameters: "Parameter Compliance",
+  eligibility: "Eligibility Criteria",
+  monitoring: "Monitoring Requirements",
+  documentation: "Documentation Completeness",
+  general: "General",
 };
 
 export default function Results() {
   const { id } = useParams<{ id: string }>();
-  const [expandedCategories, setExpandedCategories] = useState<string[]>(
-    mockReport.categories.map((c) => c.id)
-  );
+  const [report, setReport] = useState<AuditReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [expandedCategories, setExpandedCategories] = useState<string[]>([]);
+
+  useEffect(() => {
+    loadReport();
+  }, [id]);
+
+  const loadReport = async () => {
+    // First try sessionStorage (for just-completed audits)
+    const cached = sessionStorage.getItem("auditResult");
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        setReport(parsed);
+        // Expand all categories by default
+        const cats = [...new Set((parsed.issues || []).map((i: AuditIssue) => i.category))];
+        setExpandedCategories(cats as string[]);
+        setLoading(false);
+        sessionStorage.removeItem("auditResult");
+        return;
+      } catch {}
+    }
+
+    // Then try database
+    if (id && id !== "local") {
+      try {
+        const { data: reportData } = await supabase
+          .from("audit_reports")
+          .select("*")
+          .eq("id", id)
+          .single();
+
+        if (reportData) {
+          const { data: issuesData } = await supabase
+            .from("audit_issues")
+            .select("*")
+            .eq("report_id", id);
+
+          const auditReport: AuditReport = {
+            projectName: reportData.project_name,
+            summary: {
+              major: reportData.major_issues_count,
+              minor: reportData.minor_issues_count,
+              compliant: reportData.compliant_count,
+            },
+            issues: (issuesData || []).map((issue) => ({
+              id: issue.id,
+              severity: issue.severity as "major" | "minor",
+              category: issue.category,
+              title: issue.title,
+              section: issue.section,
+              description: issue.description,
+              suggestedFix: issue.suggested_fix || undefined,
+            })),
+          };
+
+          setReport(auditReport);
+          const cats = [...new Set((auditReport.issues || []).map((i) => i.category))];
+          setExpandedCategories(cats);
+        }
+      } catch (err) {
+        console.error("Error loading report:", err);
+      }
+    }
+
+    setLoading(false);
+  };
 
   const toggleCategory = (categoryId: string) => {
     setExpandedCategories((prev) =>
@@ -118,7 +130,48 @@ export default function Results() {
     );
   };
 
-  const totalIssues = mockReport.summary.major + mockReport.summary.minor;
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <main className="pt-24 pb-12 px-6">
+          <div className="container mx-auto max-w-4xl flex items-center justify-center py-20">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (!report) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <main className="pt-24 pb-12 px-6">
+          <div className="container mx-auto max-w-4xl text-center py-20">
+            <h1 className="text-2xl font-semibold mb-2">Report not found</h1>
+            <p className="text-muted-foreground mb-6">
+              This report may have been deleted or you may not have access to it.
+            </p>
+            <Button asChild>
+              <Link to="/evaluate">Run New Audit</Link>
+            </Button>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // Group issues by category
+  const issuesByCategory = (report.issues || []).reduce<Record<string, AuditIssue[]>>(
+    (acc, issue) => {
+      const cat = issue.category || "general";
+      if (!acc[cat]) acc[cat] = [];
+      acc[cat].push(issue);
+      return acc;
+    },
+    {}
+  );
 
   return (
     <div className="min-h-screen bg-background">
@@ -135,73 +188,69 @@ export default function Results() {
             <div className="flex items-center justify-between mb-8">
               <div>
                 <Link
-                  to="/reports"
+                  to="/evaluate"
                   className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground mb-2"
                 >
                   <ArrowLeft size={16} className="mr-1" />
-                  Back to Reports
+                  New Audit
                 </Link>
                 <h1 className="text-3xl font-semibold">Pre-Audit Report</h1>
                 <p className="text-muted-foreground mt-1">
-                  {mockReport.projectName}
-                </p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Generated on {new Date(mockReport.createdAt).toLocaleDateString("en-US", {
-                    year: "numeric",
-                    month: "long",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
+                  {report.projectName}
                 </p>
               </div>
-              <Button variant="outline">
-                <Download size={16} className="mr-2" />
-                Export PDF
-              </Button>
             </div>
 
             {/* Summary Cards */}
             <div className="grid grid-cols-3 gap-4 mb-8">
               <SummaryCard
                 label="Major Issues"
-                count={mockReport.summary.major}
+                count={report.summary.major}
                 variant="destructive"
                 icon={AlertCircle}
               />
               <SummaryCard
                 label="Minor Issues"
-                count={mockReport.summary.minor}
+                count={report.summary.minor}
                 variant="warning"
                 icon={AlertTriangle}
               />
               <SummaryCard
                 label="Compliant"
-                count={mockReport.summary.compliant}
+                count={report.summary.compliant}
                 variant="success"
                 icon={CheckCircle2}
               />
             </div>
 
+            {/* Overall Summary */}
+            {report.overallSummary && (
+              <Card className="shadow-soft border-border mb-6">
+                <CardContent className="p-6">
+                  <h3 className="font-medium mb-2">Summary</h3>
+                  <p className="text-sm text-muted-foreground">{report.overallSummary}</p>
+                </CardContent>
+              </Card>
+            )}
+
             {/* Issues by Category */}
             <div className="space-y-4">
-              {mockReport.categories.map((category) => (
-                <Card key={category.id} className="shadow-soft border-border overflow-hidden">
+              {Object.entries(issuesByCategory).map(([category, issues]) => (
+                <Card key={category} className="shadow-soft border-border overflow-hidden">
                   <Collapsible
-                    open={expandedCategories.includes(category.id)}
-                    onOpenChange={() => toggleCategory(category.id)}
+                    open={expandedCategories.includes(category)}
+                    onOpenChange={() => toggleCategory(category)}
                   >
                     <CollapsibleTrigger asChild>
                       <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-lg bg-accent flex items-center justify-center">
-                              <category.icon size={20} className="text-accent-foreground" />
-                            </div>
                             <div>
-                              <CardTitle className="text-lg">{category.name}</CardTitle>
+                              <CardTitle className="text-lg">
+                                {CATEGORY_LABELS[category] || category}
+                              </CardTitle>
                               <p className="text-sm text-muted-foreground">
-                                {category.issues.length} issue{category.issues.length !== 1 && "s"} found
+                                {issues.length} issue{issues.length !== 1 && "s"} found
                               </p>
                             </div>
                           </div>
@@ -209,7 +258,7 @@ export default function Results() {
                             size={20}
                             className={cn(
                               "text-muted-foreground transition-transform",
-                              expandedCategories.includes(category.id) && "rotate-180"
+                              expandedCategories.includes(category) && "rotate-180"
                             )}
                           />
                         </div>
@@ -217,8 +266,8 @@ export default function Results() {
                     </CollapsibleTrigger>
                     <CollapsibleContent>
                       <CardContent className="pt-0 space-y-4">
-                        {category.issues.map((issue) => (
-                          <IssueCard key={issue.id} issue={issue} />
+                        {issues.map((issue, idx) => (
+                          <IssueCard key={issue.id || idx} issue={issue} />
                         ))}
                       </CardContent>
                     </CollapsibleContent>
@@ -226,6 +275,33 @@ export default function Results() {
                 </Card>
               ))}
             </div>
+
+            {/* Compliant Rules */}
+            {report.compliantRules && report.compliantRules.length > 0 && (
+              <Card className="shadow-soft border-border mt-6">
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <CheckCircle2 size={20} className="text-success" />
+                    Compliant Rules ({report.compliantRules.length})
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-0 space-y-3">
+                  {report.compliantRules.map((rule) => (
+                    <div
+                      key={rule.ruleNumber}
+                      className="p-3 rounded-lg bg-success/5 border border-success/20"
+                    >
+                      <p className="text-sm font-medium">
+                        Rule {rule.ruleNumber}: {rule.title}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Evidence: {rule.evidence}
+                      </p>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
           </motion.div>
         </div>
       </main>
@@ -260,16 +336,8 @@ function SummaryCard({ label, count, variant, icon: Icon }: SummaryCardProps) {
   );
 }
 
-interface Issue {
-  id: string;
-  severity: "major" | "minor";
-  title: string;
-  section: string;
-  description: string;
-  suggestedFix: string;
-}
-
-function IssueCard({ issue }: { issue: Issue }) {
+function IssueCard({ issue }: { issue: AuditIssue }) {
+  const fix = issue.suggestedFix || issue.suggested_fix;
   return (
     <div
       className={cn(
@@ -287,17 +355,26 @@ function IssueCard({ issue }: { issue: Issue }) {
           >
             {issue.severity === "major" ? "Major" : "Minor"}
           </Badge>
+          {issue.status && (
+            <Badge variant="outline" className="text-xs">
+              {issue.status}
+            </Badge>
+          )}
           <h4 className="font-medium">{issue.title}</h4>
         </div>
       </div>
-      <p className="text-sm text-muted-foreground mb-2">{issue.section}</p>
+      {issue.section && (
+        <p className="text-sm text-muted-foreground mb-2">{issue.section}</p>
+      )}
       <p className="text-sm mb-3">{issue.description}</p>
-      <div className="bg-background/50 p-3 rounded-md border border-border">
-        <p className="text-sm">
-          <span className="font-medium text-primary">Suggested fix: </span>
-          {issue.suggestedFix}
-        </p>
-      </div>
+      {fix && (
+        <div className="bg-background/50 p-3 rounded-md border border-border">
+          <p className="text-sm">
+            <span className="font-medium text-primary">Suggested fix: </span>
+            {fix}
+          </p>
+        </div>
+      )}
     </div>
   );
 }
