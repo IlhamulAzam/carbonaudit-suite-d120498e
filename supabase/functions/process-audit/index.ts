@@ -116,37 +116,6 @@ async function extractTextFromPDF(fileBuffer: ArrayBuffer): Promise<string> {
   return result || "Unable to extract text from PDF. The document may be image-based or encrypted.";
 }
 
-function extractTextFromExcel(fileBuffer: ArrayBuffer): string {
-  // XLSX files are ZIP archives. Extract shared strings and sheet data.
-  const bytes = new Uint8Array(fileBuffer);
-  const text = new TextDecoder("latin1").decode(bytes);
-  
-  const extractedParts: string[] = [];
-  
-  // Extract readable strings from the XLSX binary
-  const readableRegex = /[A-Za-z0-9][A-Za-z0-9\s.,;:!?'"()\-/%=+<>]{5,}/g;
-  let match;
-  while ((match = readableRegex.exec(text)) !== null) {
-    const cleaned = match[0].trim();
-    if (cleaned.length > 5) {
-      extractedParts.push(cleaned);
-    }
-  }
-  
-  // Try to find XML content within the XLSX
-  const xmlRegex = /<[a-z][^>]*>([^<]+)</gi;
-  while ((match = xmlRegex.exec(text)) !== null) {
-    const content = match[1].trim();
-    if (content.length > 2 && !/^\d+$/.test(content)) {
-      extractedParts.push(content);
-    }
-  }
-
-  // Deduplicate
-  const unique = [...new Set(extractedParts)];
-  const result = unique.join("\n");
-  return result || "Unable to extract data from spreadsheet.";
-}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -167,34 +136,21 @@ Deno.serve(async (req) => {
 
     const formData = await req.formData();
     const pddFile = formData.get("pdd") as File | null;
-    const calculationFile = formData.get("calculation") as File | null;
 
     if (!pddFile) {
       throw new Error("PDD file is required");
     }
 
     console.log(`Processing PDD: ${pddFile.name} (${pddFile.size} bytes)`);
-    if (calculationFile) {
-      console.log(`Processing Calculation: ${calculationFile.name} (${calculationFile.size} bytes)`);
-    }
 
-    // Extract text from documents
+    // Extract text from PDD
     const pddBuffer = await pddFile.arrayBuffer();
     const pddText = await extractTextFromPDF(pddBuffer);
     console.log(`Extracted PDD text length: ${pddText.length} chars`);
 
-    let calculationText = "";
-    if (calculationFile) {
-      const calcBuffer = await calculationFile.arrayBuffer();
-      calculationText = extractTextFromExcel(calcBuffer);
-      console.log(`Extracted calculation text length: ${calculationText.length} chars`);
-    }
-
     // Truncate to fit context window
-    const maxPddChars = 25000;
-    const maxCalcChars = 10000;
+    const maxPddChars = 30000;
     const truncatedPdd = pddText.length > maxPddChars ? pddText.substring(0, maxPddChars) + "\n[...TRUNCATED]" : pddText;
-    const truncatedCalc = calculationText.length > maxCalcChars ? calculationText.substring(0, maxCalcChars) + "\n[...TRUNCATED]" : calculationText;
 
     // Build the LLM prompt
     const systemPrompt = `You are a STRICT rule-based document compliance checker for JCM carbon credit methodology.
@@ -228,19 +184,14 @@ You must return a JSON response with this exact structure:
       "status": "FAIL" or "NOT FOUND"
     }
   ],
-  "compliantRules": [
-    {
-      "ruleNumber": 1,
-      "title": "rule name",
-      "evidence": "exact quote from document proving compliance"
-    }
-  ],
   "summary": "brief summary based ONLY on findings above"
 }
 
 Severity classification:
 - "major": Rule FAIL with evidence of wrong values, missing critical calculations, or formula errors
 - "minor": Rule NOT FOUND (missing documentation) or minor discrepancies
+
+IMPORTANT: Only output issues (FAIL or NOT FOUND). Do NOT include compliant/passing rules.
 
 CRITICAL: You must evaluate EVERY rule. Different documents MUST produce different results.
 Return ONLY valid JSON, no markdown or other formatting.`;
@@ -251,10 +202,7 @@ ${JCM_RULES}
 UPLOADED PDD DOCUMENT:
 ${truncatedPdd}
 
-${truncatedCalc ? `UPLOADED CALCULATION SPREADSHEET:
-${truncatedCalc}` : "NO CALCULATION SPREADSHEET PROVIDED - mark Rule 16 (Data Cross-Consistency) as NOT FOUND."}
-
-Now evaluate this document against ALL 17 rules. Return the JSON compliance report.`;
+Now evaluate this PDD document against ALL 17 rules. Return ONLY the issues (FAIL or NOT FOUND) as JSON.`;
 
     console.log("Calling AI gateway for evaluation...");
 
@@ -328,7 +276,6 @@ Now evaluate this document against ALL 17 rules. Return the JSON compliance repo
       
       const majorCount = report.issues?.filter((i: any) => i.severity === "major").length || 0;
       const minorCount = report.issues?.filter((i: any) => i.severity === "minor").length || 0;
-      const compliantCount = report.compliantRules?.length || 0;
 
       const { data: reportData, error: reportError } = await supabase
         .from("audit_reports")
@@ -337,7 +284,7 @@ Now evaluate this document against ALL 17 rules. Return the JSON compliance repo
           project_name: report.projectName || "Unknown Project",
           major_issues_count: majorCount,
           minor_issues_count: minorCount,
-          compliant_count: compliantCount,
+          compliant_count: 0,
           status: "completed",
         })
         .select("id")
@@ -377,10 +324,8 @@ Now evaluate this document against ALL 17 rules. Return the JSON compliance repo
           summary: {
             major: report.issues?.filter((i: any) => i.severity === "major").length || 0,
             minor: report.issues?.filter((i: any) => i.severity === "minor").length || 0,
-            compliant: report.compliantRules?.length || 0,
           },
           issues: report.issues || [],
-          compliantRules: report.compliantRules || [],
           overallSummary: report.summary || "",
         },
       }),

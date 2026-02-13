@@ -12,7 +12,6 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   CloudUpload,
   FileText,
-  FileSpreadsheet,
   X,
   CheckCircle2,
   Loader2,
@@ -21,7 +20,7 @@ import { cn } from "@/lib/utils";
 
 interface UploadedFile {
   file: File;
-  type: "pdd" | "calculation";
+  type: "pdd";
 }
 
 export default function Evaluate() {
@@ -33,31 +32,23 @@ export default function Evaluate() {
   const { toast } = useToast();
 
   const pddFile = files.find((f) => f.type === "pdd");
-  const calculationFile = files.find((f) => f.type === "calculation");
-  const canRunAudit = pddFile && calculationFile && !isProcessing;
+  const canRunAudit = pddFile && !isProcessing;
 
   const onDrop = useCallback(
     (acceptedFiles: File[]) => {
       acceptedFiles.forEach((file) => {
         const extension = file.name.split(".").pop()?.toLowerCase();
-        let type: "pdd" | "calculation" | null = null;
 
         if (extension === "pdf") {
-          type = "pdd";
-        } else if (extension === "xlsx" || extension === "xls") {
-          type = "calculation";
-        }
-
-        if (type) {
           setFiles((prev) => {
-            const filtered = prev.filter((f) => f.type !== type);
-            return [...filtered, { file, type }];
+            const filtered = prev.filter((f) => f.type !== "pdd");
+            return [...filtered, { file, type: "pdd" as const }];
           });
         } else {
           toast({
             variant: "destructive",
             title: "Invalid file type",
-            description: "Please upload PDF for PDD or Excel files for calculations.",
+            description: "Please upload a PDF file for the PDD.",
           });
         }
       });
@@ -69,14 +60,12 @@ export default function Evaluate() {
     onDrop,
     accept: {
       "application/pdf": [".pdf"],
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
-      "application/vnd.ms-excel": [".xls"],
     },
     multiple: true,
   });
 
-  const removeFile = (type: "pdd" | "calculation") => {
-    setFiles((prev) => prev.filter((f) => f.type !== type));
+  const removeFile = () => {
+    setFiles([]);
   };
 
   const runAudit = async () => {
@@ -99,9 +88,6 @@ export default function Evaluate() {
     try {
       const formData = new FormData();
       formData.append("pdd", pddFile!.file);
-      if (calculationFile) {
-        formData.append("calculation", calculationFile.file);
-      }
 
       // Get auth token if logged in
       const { data: { session } } = await supabase.auth.getSession();
@@ -161,9 +147,9 @@ export default function Evaluate() {
             transition={{ duration: 0.5 }}
           >
             <div className="text-center mb-8">
-              <h1 className="text-3xl font-semibold mb-2">Pre-Audit Your Documents</h1>
+              <h1 className="text-3xl font-semibold mb-2">Pre-Audit Your PDD</h1>
               <p className="text-muted-foreground">
-                Upload your PDD and calculation spreadsheet for JCM compliance validation
+                Upload your Project Design Document for JCM compliance validation
               </p>
             </div>
 
@@ -192,7 +178,7 @@ export default function Evaluate() {
                     {isDragActive ? "Drop files here" : "Upload Project Documents"}
                   </h3>
                   <p className="text-muted-foreground text-sm">
-                    PDD (PDF) and Calculation Spreadsheet (XLSX)
+                    Project Design Document (PDF)
                   </p>
                 </div>
 
@@ -202,13 +188,7 @@ export default function Evaluate() {
                     label="Project Design Document"
                     file={pddFile?.file}
                     icon={FileText}
-                    onRemove={() => removeFile("pdd")}
-                  />
-                  <FileStatus
-                    label="Calculation Spreadsheet"
-                    file={calculationFile?.file}
-                    icon={FileSpreadsheet}
-                    onRemove={() => removeFile("calculation")}
+                    onRemove={removeFile}
                   />
                 </div>
 
@@ -246,31 +226,18 @@ export default function Evaluate() {
               </CardContent>
             </Card>
 
-            {/* Info Cards */}
-            <div className="grid md:grid-cols-2 gap-4">
-              <Card className="shadow-soft border-border">
-                <CardContent className="p-4">
-                  <h4 className="font-medium mb-1 flex items-center gap-2">
-                    <FileText size={16} className="text-primary" />
-                    PDD (PDF)
-                  </h4>
-                  <p className="text-sm text-muted-foreground">
-                    Your Project Design Document containing project details and methodology
-                  </p>
-                </CardContent>
-              </Card>
-              <Card className="shadow-soft border-border">
-                <CardContent className="p-4">
-                  <h4 className="font-medium mb-1 flex items-center gap-2">
-                    <FileSpreadsheet size={16} className="text-primary" />
-                    Calculation Sheet (XLSX)
-                  </h4>
-                  <p className="text-sm text-muted-foreground">
-                    Excel file with emission calculations and monitoring data
-                  </p>
-                </CardContent>
-              </Card>
-            </div>
+            {/* Info Card */}
+            <Card className="shadow-soft border-border">
+              <CardContent className="p-4">
+                <h4 className="font-medium mb-1 flex items-center gap-2">
+                  <FileText size={16} className="text-primary" />
+                  PDD (PDF)
+                </h4>
+                <p className="text-sm text-muted-foreground">
+                  Your Project Design Document containing project details and methodology
+                </p>
+              </CardContent>
+            </Card>
           </motion.div>
         </div>
       </main>
