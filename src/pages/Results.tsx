@@ -9,11 +9,9 @@ import { Navbar } from "@/components/Navbar";
 import { supabase } from "@/integrations/supabase/client";
 import {
   ArrowLeft,
-  Download,
   ChevronDown,
   AlertCircle,
   AlertTriangle,
-  CheckCircle2,
   Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -35,10 +33,8 @@ interface AuditReport {
   summary: {
     major: number;
     minor: number;
-    compliant: number;
   };
   issues: AuditIssue[];
-  compliantRules?: { ruleNumber: number; title: string; evidence: string }[];
   overallSummary?: string;
 }
 
@@ -97,7 +93,6 @@ export default function Results() {
             summary: {
               major: reportData.major_issues_count,
               minor: reportData.minor_issues_count,
-              compliant: reportData.compliant_count,
             },
             issues: (issuesData || []).map((issue) => ({
               id: issue.id,
@@ -202,7 +197,7 @@ export default function Results() {
             </div>
 
             {/* Summary Cards */}
-            <div className="grid grid-cols-3 gap-4 mb-8">
+            <div className="grid grid-cols-2 gap-4 mb-8">
               <SummaryCard
                 label="Major Issues"
                 count={report.summary.major}
@@ -214,12 +209,6 @@ export default function Results() {
                 count={report.summary.minor}
                 variant="warning"
                 icon={AlertTriangle}
-              />
-              <SummaryCard
-                label="Compliant"
-                count={report.summary.compliant}
-                variant="success"
-                icon={CheckCircle2}
               />
             </div>
 
@@ -276,32 +265,6 @@ export default function Results() {
               ))}
             </div>
 
-            {/* Compliant Rules */}
-            {report.compliantRules && report.compliantRules.length > 0 && (
-              <Card className="shadow-soft border-border mt-6">
-                <CardHeader>
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <CheckCircle2 size={20} className="text-success" />
-                    Compliant Rules ({report.compliantRules.length})
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="pt-0 space-y-3">
-                  {report.compliantRules.map((rule) => (
-                    <div
-                      key={rule.ruleNumber}
-                      className="p-3 rounded-lg bg-success/5 border border-success/20"
-                    >
-                      <p className="text-sm font-medium">
-                        Rule {rule.ruleNumber}: {rule.title}
-                      </p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Evidence: {rule.evidence}
-                      </p>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            )}
           </motion.div>
         </div>
       </main>
@@ -312,7 +275,7 @@ export default function Results() {
 interface SummaryCardProps {
   label: string;
   count: number;
-  variant: "destructive" | "warning" | "success";
+  variant: "destructive" | "warning";
   icon: React.ElementType;
 }
 
@@ -320,7 +283,6 @@ function SummaryCard({ label, count, variant, icon: Icon }: SummaryCardProps) {
   const variantStyles = {
     destructive: "bg-destructive/10 text-destructive border-destructive/20",
     warning: "bg-warning/10 text-warning-foreground border-warning/20",
-    success: "bg-success/10 text-success border-success/20",
   };
 
   return (
