@@ -8,6 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { Navbar } from "@/components/Navbar";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 import {
   CloudUpload,
   FileText,
@@ -81,36 +82,67 @@ export default function Evaluate() {
   const runAudit = async () => {
     if (!canRunAudit) return;
 
-    // Authentication not required for pre-audit
-
     setIsProcessing(true);
     setProgress(0);
 
-    // Simulate progress for now (will be replaced with actual API call)
+    // Progress animation
     const interval = setInterval(() => {
       setProgress((prev) => {
-        if (prev >= 95) {
+        if (prev >= 90) {
           clearInterval(interval);
           return prev;
         }
-        return prev + Math.random() * 15;
+        return prev + Math.random() * 8;
       });
-    }, 500);
+    }, 800);
 
     try {
-      // TODO: Implement actual API call to process documents
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      const formData = new FormData();
+      formData.append("pdd", pddFile!.file);
+      if (calculationFile) {
+        formData.append("calculation", calculationFile.file);
+      }
+
+      // Get auth token if logged in
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: Record<string, string> = {};
+      if (session?.access_token) {
+        headers["Authorization"] = `Bearer ${session.access_token}`;
+      }
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const response = await fetch(`${supabaseUrl}/functions/v1/process-audit`, {
+        method: "POST",
+        headers: {
+          ...headers,
+          "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Processing failed");
+      }
+
+      clearInterval(interval);
       setProgress(100);
 
-      // Navigate to results (mock ID for now)
+      // Store result in sessionStorage for the results page
+      sessionStorage.setItem("auditResult", JSON.stringify(data.report));
+
       setTimeout(() => {
-        navigate("/results/demo");
+        const resultId = data.reportId || "local";
+        navigate(`/results/${resultId}`);
       }, 500);
     } catch (error) {
+      clearInterval(interval);
+      console.error("Audit error:", error);
       toast({
         variant: "destructive",
         title: "Processing failed",
-        description: "There was an error processing your documents. Please try again.",
+        description: error instanceof Error ? error.message : "There was an error processing your documents. Please try again.",
       });
       setIsProcessing(false);
       setProgress(0);
